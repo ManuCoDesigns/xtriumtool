@@ -1,10 +1,10 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useDropzone } from "react-dropzone";
 import { diffLines } from "diff";
 import {
-  AlertTriangle, CheckCircle2, FileJson, Loader2, Sparkles, XCircle, Info, Send, Inbox,
+  AlertTriangle, CheckCircle2, FileJson, Loader2, Sparkles, XCircle, Info, Send, Inbox, LogOut, Settings, User,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Card } from "@/components/ui/card";
@@ -54,7 +54,48 @@ function Index() {
     corrected: unknown; changes: Array<{ path: string; reason: string; before?: unknown; after?: unknown }>; error?: string;
   } | null>(null);
 
+  // Auth state
+  const [user, setUser] = useState<{ id: string; email: string } | null>(null);
+  const [userProfile, setUserProfile] = useState<{ id: string; email: string; full_name: string | null; role: string } | null>(null);
+  const [authLoading, setAuthLoading] = useState(true);
+
   const callLlm = useServerFn(llmReview);
+
+  // Load user and profile on mount
+  useEffect(() => {
+    loadUserProfile();
+  }, []);
+
+  async function loadUserProfile() {
+    try {
+      const { data: authUser } = await supabase.auth.getUser();
+      if (authUser.user) {
+        setUser({ id: authUser.user.id, email: authUser.user.email || "" });
+        
+        const { data: profile } = await supabase
+          .from("profiles")
+          .select("id, email, full_name, role")
+          .eq("id", authUser.user.id)
+          .single();
+        
+        if (profile) {
+          setUserProfile(profile);
+          setSubmittedBy(profile.full_name || profile.email);
+        }
+      }
+    } catch (err) {
+      console.error("Failed to load user profile:", err);
+    } finally {
+      setAuthLoading(false);
+    }
+  }
+
+  async function handleSignOut() {
+    await supabase.auth.signOut();
+    setUser(null);
+    setUserProfile(null);
+    setSubmittedBy("");
+  }
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({
     multiple: false,
@@ -99,18 +140,23 @@ function Index() {
   }
 
   async function submitForReview() {
-    if (!parsed) return;
+    if (!parsed || !user) {
+      navigate({ to: "/auth" });
+      return;
+    }
     setSubmitting(true);
     setSubmitErr("");
     const { data, error } = await supabase
       .from("submissions")
       .insert({
+        user_id: user.id,
         filename: filename || null,
         source_url: sourceUrl || null,
         schema_id: schemaId,
         payload: parsed,
         validation: (result ?? null) as never,
-        submitted_by: submittedBy || null,
+        submitted_by: submittedBy || user.email,
+        submitted_by_name: userProfile?.full_name || submittedBy || user.email,
       })
       .select("id")
       .single();
@@ -141,6 +187,35 @@ function Index() {
             </h1>
           </div>
           <div className="flex items-center gap-2">
+            {authLoading ? (
+              <Loader2 className="size-4 animate-spin text-muted-foreground" />
+            ) : user ? (
+              <>
+                <div className="text-xs text-right mr-2 hidden sm:block">
+                  <p className="font-medium">{userProfile?.full_name || user.email}</p>
+                  <p className="text-muted-foreground">{userProfile?.role}</p>
+                </div>
+                {userProfile?.role === "admin" || userProfile?.role === "super_admin" ? (
+                  <Button asChild variant="ghost" size="sm">
+                    <Link to="/admin/users" title="Admin">
+                      <Settings className="size-4" />
+                    </Link>
+                  </Button>
+                ) : null}
+                <Button asChild variant="ghost" size="sm">
+                  <Link to="/profile" title="Profile">
+                    <User className="size-4" />
+                  </Link>
+                </Button>
+                <Button variant="ghost" size="sm" onClick={handleSignOut} title="Sign out">
+                  <LogOut className="size-4" />
+                </Button>
+              </>
+            ) : (
+              <Button asChild variant="outline" size="sm">
+                <Link to="/auth">Sign in</Link>
+              </Button>
+            )}
             <Button asChild variant="outline" size="sm">
               <Link to="/submissions"><Inbox className="size-4" /> Reviewer queue</Link>
             </Button>
@@ -319,19 +394,42 @@ function Index() {
               Saves the dataset, source URL, and validation report so a reviewer can open it later.
             </p>
           </div>
-          <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-end">
-            <div className="space-y-1.5">
-              <Label htmlFor="who">Your name or email (optional)</Label>
-              <Input id="who" placeholder="jane@example.com" value={submittedBy} onChange={(e) => setSubmittedBy(e.target.value)} />
+          {!user ? (
+            <div className="rounded-md bg-amber-500/10 border border-amber-500/30 p-4">
+              <p className="text-sm text-amber-700 dark:text-amber-400 mb-3">
+                You must sign in to submit datasets.
+              </p>
+              <Button asChild className="w-full">
+                <Link to="/auth">Sign in or create account</Link>
+              </Button>
             </div>
-            <Button onClick={submitForReview} disabled={!parsed || submitting}>
-              {submitting ? <><Loader2 className="size-4 animate-spin" /> Submitting…</> : <><Send className="size-4" /> Submit for review</>}
-            </Button>
-          </div>
-          {!result && parsed && (
-            <p className="text-xs text-muted-foreground">Tip: run validation first so the reviewer sees the findings.</p>
+          ) : (
+            <>
+              <div className="grid gap-3 sm:grid-cols-[1fr_auto] items-end">
+                <div className="space-y-1.5">
+                  <Label htmlFor="who">Submitted by</Label>
+                  <Input 
+                    id="who" 
+                    placeholder="Your name" 
+                    value={submittedBy} 
+                    onChange={(e) => setSubmittedBy(e.target.value)} 
+                    disabled={!!userProfile?.full_name}
+                    title={userProfile?.full_name ? "Using your profile name" : undefined}
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    {userProfile?.full_name ? `Using: ${userProfile.full_name}` : "Add your name to identify your submissions"}
+                  </p>
+                </div>
+                <Button onClick={submitForReview} disabled={!parsed || submitting}>
+                  {submitting ? <><Loader2 className="size-4 animate-spin" /> Submitting…</> : <><Send className="size-4" /> Submit for review</>}
+                </Button>
+              </div>
+              {!result && parsed && (
+                <p className="text-xs text-muted-foreground">Tip: run validation first so the reviewer sees the findings.</p>
+              )}
+              {submitErr && <p className="text-xs text-destructive">{submitErr}</p>}
+            </>
           )}
-          {submitErr && <p className="text-xs text-destructive">{submitErr}</p>}
         </Card>
       </main>
     </div>

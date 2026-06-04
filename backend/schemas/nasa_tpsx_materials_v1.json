@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "nasa_tpsx_materials_v1",
+  "$id": "nasa_tpsx_materials_v1_2",
   "title": "NASA TPSX Materials Graph",
+  "$comment": "Schema version 1.2 — updated to strictly align with SOP-DS-001 v1.3 (effective June 3, 2026). Changes from v1: (1) property.value type narrowed to string only (was string|number); (2) property_category enum adds 'environmental', removes 'other' (SOP §6.4 does not list 'other'); (3) images changed from array-of-URI-strings to array-of-objects with image_url/image_data/image_type (SOP §7); (4) top-level source split into separate $def with 'raw' object field (SOP §8.1 v1.3); (5) property-level source uses separate $def without 'raw' field (SOP §6.1); (6) property.raw additionalProperties broadened to string|number|null to accommodate all raw dict values; (7) material canonical_name gains hyphen-pattern constraint; (8) property canonical_name gains snake_case pattern constraint.",
   "type": "object",
   "required": [
     "material_name",
@@ -12,41 +13,125 @@
     "sources"
   ],
   "properties": {
-    "material_id": { "type": ["string", "null"] },
-    "material_name": { "type": "string", "minLength": 1 },
-    "canonical_name": { "type": "string", "minLength": 1 },
-    "cas_number": { "type": ["string", "null"] },
-    "uns_number": { "type": ["string", "null"] },
-    "icsd_id": { "type": ["string", "null"] },
-    "inchikey": { "type": ["string", "null"] },
-    "external_id_type": { "type": ["string", "null"] },
-    "chemical_formula": { "type": ["string", "null"] },
-    "material_type": {
-      "type": "string",
-      "enum": ["polymer", "metal", "adhesive", "ceramic", "composite", "coating", "foam", "fabric", "other"]
+    "material_id": {
+      "type": ["string", "null"],
+      "$comment": "Always null — assigned by load_to_neo4j.py at import time. SOP §5.1."
     },
-    "material_subtype": { "type": ["string", "null"] },
-    "grade": { "type": ["string", "null"] },
-    "trade_names": { "type": "array", "items": { "type": "string" } },
-    "is_variant": { "type": "boolean" },
-    "base_material_canonical_name": { "type": ["string", "null"] },
-    "supplier_context": { "$ref": "#/$defs/supplier_context" },
+    "material_name": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "REQUIRED. Copied exactly as it appears in NASA data. SOP §5.1."
+    },
+    "canonical_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "$comment": "FIX (was unconstrained string): Must be lowercase, spaces to hyphens, remove specials. e.g. 'Aluminum 6061-T6' → 'aluminum-6061-t6'. Pattern enforces lowercase-hyphenated form. SOP §5.1."
+    },
+    "cas_number": {
+      "type": ["string", "null"],
+      "$comment": "null — NASA TPSX does not provide CAS numbers. SOP §5.1."
+    },
+    "uns_number": {
+      "type": ["string", "null"],
+      "$comment": "null — NASA TPSX does not provide UNS designations. SOP §5.1."
+    },
+    "icsd_id": {
+      "type": ["string", "null"],
+      "$comment": "null — not in NASA TPSX. SOP §5.1."
+    },
+    "inchikey": {
+      "type": ["string", "null"],
+      "$comment": "null — not in NASA TPSX. SOP §5.1."
+    },
+    "external_id_type": {
+      "type": ["string", "null"],
+      "$comment": "null — not in NASA TPSX. SOP §5.1."
+    },
+    "chemical_formula": {
+      "type": ["string", "null"],
+      "$comment": "Extract only if Composition cell content is a formula string with no prose. If cell is mixed formula+prose, or prose only, set null and append full cell to processing_notes. Test: if you cannot copy the cell value directly into chemical_formula without editing it, set null. SOP §5.1 v1.3."
+    },
+    "material_type": {
+      "type": ["string", "null"],
+      "enum": [
+        "polymer",
+        "metal",
+        "adhesive",
+        "ceramic",
+        "composite",
+        "coating",
+        "foam",
+        "fabric",
+        "other",
+        null
+      ],
+      "$comment": "Mapped from NASA Category column. null if no reasonable match exists or Category is a database/source name. Record original Category in processing_notes. Log unmapped categories in batch review file. SOP §5.2 v1.3 decision rule."
+    },
+    "material_subtype": {
+      "type": ["string", "null"],
+      "$comment": "Interpreted from Composition/Description if clearly stated (e.g. thermoplastic, thermoset, reinforced). Otherwise null. SOP §5.2."
+    },
+    "grade": {
+      "type": ["string", "null"],
+      "$comment": "Extract only when there is an explicit, unambiguous standalone alphanumeric grade token. e.g. 'Aluminum 6061-T6'→'T6', 'PEEK 450G'→'450G', 'Titanium Grade 5'→'Grade 5'. Chemical compound descriptions and material designations (e.g. PMR-15) are not grades — set null. SOP §5.2 v1.3."
+    },
+    "trade_names": {
+      "type": "array",
+      "items": { "type": "string" },
+      "$comment": "Extracted from Name/Description if mentioned. Default: []. SOP §5.2."
+    },
+    "is_variant": {
+      "type": "boolean",
+      "$comment": "false by default. Set true only if clearly a variant of a base material. SOP §5.2."
+    },
+    "base_material_canonical_name": {
+      "type": ["string", "null"],
+      "$comment": "null unless is_variant is true. SOP §5.2."
+    },
+    "supplier_context": {
+      "$ref": "#/$defs/supplier_context"
+    },
     "properties": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/property" }
+      "items": { "$ref": "#/$defs/property" },
+      "$comment": "REQUIRED. One property object per property instance. SOP §6."
     },
-    "standards_referenced": { "type": "array", "items": { "type": "string" } },
-    "compliance_references": { "type": "array", "items": { "type": "string" } },
-    "applications_mentioned": { "type": "array", "items": { "type": "string" } },
-    "processing_notes": { "type": ["string", "null"] },
-    "hazard_flags": { "type": "array", "items": { "type": "string" } },
-    "availability_notes": { "type": ["string", "null"] },
-    "images": { "type": "array", "items": { "type": "string", "format": "uri" } },
+    "standards_referenced": {
+      "type": "array",
+      "items": { "type": "string" },
+      "$comment": "Standard codes parsed from Property_References (ASTM, ISO, NASA-TM). SOP §8.2."
+    },
+    "compliance_references": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "applications_mentioned": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "processing_notes": {
+      "type": ["string", "null"],
+      "$comment": "Assembled from Composition (if not a formula), Description, Notes, TRL, Manufacturer. Each segment prefixed with its label only when non-empty. Suppress segments whose source cell is empty or contains only a parsing artefact (Description:, N/A, n/a, -, em dash, None, Unknown). SOP §5.4 v1.3."
+    },
+    "hazard_flags": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "availability_notes": {
+      "type": ["string", "null"]
+    },
+    "images": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/image" },
+      "$comment": "FIX (was array of URI strings): SOP §7 defines each image as an object with image_url, image_data, and image_type. Set to [] if Pictures column is empty or contains non-URL data."
+    },
     "sources": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/source" }
+      "items": { "$ref": "#/$defs/top_level_source" },
+      "$comment": "REQUIRED. At least one entry. sources[0].source_name must always be 'NASA TPSX Materials Database' (long form). sources[0].raw is a structured object. SOP §8.1 v1.3."
     }
   },
   "$defs": {
@@ -54,39 +139,170 @@
       "type": "object",
       "required": ["supplier_canonical_name"],
       "properties": {
-        "supplier_canonical_name": { "type": "string", "minLength": 1 },
-        "supplier_product_id": { "type": ["string", "null"] },
-        "supplier_grade_name": { "type": ["string", "null"] },
-        "datasheet_url": { "type": ["string", "null"], "format": "uri" }
+        "supplier_canonical_name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Fixed mapping from Database_Source. TPSX→nasa-tpsx, K&K Associates Materials→kk-associates-materials, NASA JSC PathFinder Materials→nasa-jsc-pathfinder-materials, NASA Langley Research Center Database→nasa-langley-research-center-database, NASA Ames Thermal Protection Materials→nasa-ames-thermal-protection-materials. SOP §5.3 v1.3."
+        },
+        "supplier_product_id": {
+          "type": ["string", "null"],
+          "$comment": "null — not in NASA data. SOP §5.3."
+        },
+        "supplier_grade_name": {
+          "type": ["string", "null"],
+          "$comment": "Extracted from Material_Name (e.g. '6061-T6' from 'Aluminum 6061-T6'). null if no grade token. SOP §5.3."
+        },
+        "datasheet_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "$comment": "Copy URL column value as-is — always a MaterialDetail URL (https://tpsx.arc.nasa.gov/MaterialDetail?id=N). Do not construct or modify. SOP §5.3 v1.3."
+        }
       }
     },
     "property": {
       "type": "object",
       "required": ["name", "canonical_name", "value", "unit", "property_category", "source"],
       "properties": {
-        "name": { "type": "string", "minLength": 1 },
-        "canonical_name": { "type": "string", "minLength": 1 },
-        "value": { "type": ["string", "number"] },
-        "numeric_value": { "type": ["number", "null"] },
-        "unit": { "type": ["string", "null"] },
-        "condition": { "type": ["string", "null"] },
+        "name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Human-readable property name with spaces. e.g. 'Density', 'Tensile Strength Isotropic'. SOP §6.1."
+        },
+        "canonical_name": {
+          "type": "string",
+          "minLength": 1,
+          "pattern": "^[a-z][a-z0-9_]*$",
+          "$comment": "FIX (was unconstrained string): Must be snake_case — lowercase, spaces to underscores, possessive apostrophes dropped. e.g. tensile_strength_isotropic, youngs_modulus, poissons_ratio. Pattern enforces snake_case form. SOP §6.3."
+        },
+        "value": {
+          "type": "string",
+          "$comment": "FIX (was type ['string','number']): ALWAYS a string — SOP §6.2 v1.3 states value is 'always a string'. Preserve the string as pandas produces it (e.g. '2.7', '288.0', '83400000.0'). Do not reformat to scientific notation. Ranges like '40-60' copied as string. numeric_value carries the actual numeric for downstream use."
+        },
+        "numeric_value": {
+          "type": ["number", "null"],
+          "$comment": "Parsed float/int from value, or null if value is non-numeric (range, text). SOP §6.2."
+        },
+        "unit": {
+          "type": ["string", "null"],
+          "$comment": "From _Units column. null if column absent. SOP §6.2."
+        },
+        "condition": {
+          "type": ["string", "null"],
+          "$comment": "Constructed from STP mapping (STP→'STP', No→'Non-STP', nonstp→'Non-STP', assumed/assumed→'assumed STP', absent→null) plus instance label when same base property appears more than once in the row (count-based, not suffix-based). e.g. 'Non-STP, Instance 1'. null if single occurrence and no STP. SOP §6.2 v1.3, §6.5 v1.3."
+        },
         "property_category": {
           "type": "string",
-          "enum": ["mechanical", "thermal", "physical", "electrical", "optical", "chemical", "processing", "other"]
+          "enum": [
+            "mechanical",
+            "thermal",
+            "physical",
+            "electrical",
+            "optical",
+            "chemical",
+            "environmental",
+            "processing"
+          ],
+          "$comment": "FIX (was missing 'environmental', had 'other'): SOP §6.4 defines exactly these 8 categories. 'environmental' covers Effective_Heat_of_Ablation, Char_Yield, Pyrolysis_Gas_Enthalpy. 'other' is not a valid SOP category and has been removed."
         },
-        "raw": { "type": ["object", "null"] },
-        "source": { "$ref": "#/$defs/source" }
+        "raw": {
+          "type": ["object", "null"],
+          "additionalProperties": {
+            "type": ["string", "number", "null"]
+          },
+          "$comment": "FIX (was additionalProperties: string only): Values can be strings, numbers (e.g. instance numbers), or null. However per SOP §10 v1.1 the key-omission rule applies: if a source CSV cell is empty or a suppressed artefact, omit the key entirely from raw — do NOT set the key to null. null here means the entire raw object is absent, not that individual keys hold null values."
+        },
+        "source": {
+          "$ref": "#/$defs/property_source",
+          "$comment": "FIX (was shared source def which included 'raw' field): Property-level source has no 'raw' field. Only top-level sources[] have raw. SOP §6.1."
+        }
       }
     },
-    "source": {
+    "image": {
+      "type": "object",
+      "$comment": "FIX (images was array of URI strings): SOP §7 defines each entry as an object with these three fields.",
+      "properties": {
+        "image_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "$comment": "URL extracted from Pictures column. One object per URL. SOP §7."
+        },
+        "image_data": {
+          "type": "null",
+          "$comment": "Always null — binary data is not in the CSV export. SOP §7."
+        },
+        "image_type": {
+          "type": ["string", "null"],
+          "$comment": "null unless type is determinable (e.g. 'microstructure'). SOP §7."
+        }
+      }
+    },
+    "property_source": {
       "type": "object",
       "required": ["source_name", "source_url", "tier"],
+      "$comment": "FIX: Property-level source definition — intentionally excludes 'raw' field. The shared source def in v1 allowed 'raw' on property sources, which is incorrect. SOP §6.1 shows property.source has only source_name, source_url, doi, tier.",
       "properties": {
-        "source_name": { "type": "string", "minLength": 1 },
-        "source_url": { "type": "string", "format": "uri" },
-        "doi": { "type": ["string", "null"] },
-        "tier": { "type": "string", "enum": ["tier1", "tier2", "tier3"] },
-        "raw": { "type": ["string", "null"] }
+        "source_name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Two-level rule: use _Source column value if it is a named external standard (ASTM XXXX, ISO XXX-X, NASA-TM-XXXX, NASA-CR-XXXX). Otherwise 'NASA TPSX' (short form). Generic values like 'measured', 'TPSX Database', blank → fall back to 'NASA TPSX'. SOP §6.1 v1.2, §6.2."
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "$comment": "URL column value — always the MaterialDetail URL. Same value used for all URL fields. SOP §5.3 v1.3."
+        },
+        "doi": {
+          "type": ["string", "null"]
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["tier1", "tier2", "tier3"],
+          "$comment": "tier1 for all NASA TPSX data. SOP §8."
+        }
+      }
+    },
+    "top_level_source": {
+      "type": "object",
+      "required": ["source_name", "source_url", "tier"],
+      "$comment": "FIX (was shared def with raw as string|null): Top-level sources[] entry. Differs from property_source by (a) source_name must use the long form 'NASA TPSX Materials Database', and (b) has an optional 'raw' object field for General_References, Point_of_Contact, Last_Modified. SOP §8.1 v1.3.",
+      "properties": {
+        "source_name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "MUST use long form: 'NASA TPSX Materials Database'. Never the short form 'NASA TPSX' at this level. SOP §8.1 v1.3."
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "$comment": "URL column value — MaterialDetail URL. SOP §5.3 v1.3."
+        },
+        "doi": {
+          "type": ["string", "null"]
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["tier1", "tier2", "tier3"],
+          "$comment": "tier1 for NASA TPSX. SOP §8."
+        },
+        "raw": {
+          "type": ["object", "null"],
+          "properties": {
+            "General_References": {
+              "type": "string",
+              "$comment": "Include if non-empty and not a suppressed artefact. Omit key entirely if empty. SOP §8.1 v1.3."
+            },
+            "Point_of_Contact": {
+              "type": "string",
+              "$comment": "Include if non-empty and not a suppressed artefact. Omit key entirely if empty. SOP §8.1 v1.3."
+            },
+            "Last_Modified": {
+              "type": "string",
+              "$comment": "Include if non-empty and not a suppressed artefact. Omit key entirely if empty. SOP §8.1 v1.3."
+            }
+          },
+          "additionalProperties": false,
+          "$comment": "FIX (was type string|null): Structured object with exactly three optional keys. Apply key-omission rule: omit any key whose CSV cell is empty or a suppressed artefact (Description:, N/A, n/a, -, em dash, None, Unknown). If all three cells are empty/artefact, omit the raw field entirely (set to null). SOP §8.1 v1.3."
+        }
       }
     }
   }

@@ -1,12 +1,14 @@
 import { createOpenAICompatible } from "@ai-sdk/openai-compatible";
 
-export function createLovableAiGatewayProvider(lovableApiKey: string) {
+/**
+ * Creates a Groq LLM provider.
+ * Requires GROQ_API_KEY environment variable.
+ * Get a free API key from https://console.groq.com
+ */
+export function createGroqProvider(groqApiKey: string) {
   return createOpenAICompatible({
-    name: "lovable",
-    baseURL: "https://ai.gateway.lovable.dev/v1",
-    headers: {
-      "Lovable-API-Key": lovableApiKey,
-      "X-Lovable-AIG-SDK": "vercel-ai-sdk",
-    },
+    name: "groq",
+    baseURL: "https://api.groq.com/openai/v1",
+    apiKey: groqApiKey,
   });
 }

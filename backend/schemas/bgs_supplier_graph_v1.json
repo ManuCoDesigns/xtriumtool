@@ -1,7 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
-  "$id": "bgs_supplier_graph_v1",
+  "$id": "bgs_supplier_graph_v1_2",
   "title": "BGS Directory of Mines and Quarries — Supplier Graph",
+  "$comment": "Schema version 1.2 — updated to strictly align with SOP-DS-002 v1.1 (effective June 4, 2026). Changes from v1: (1) industry_sector now constrained to SOP §4.3 enum; (2) site.site_type now constrained to SOP §5.2 v1.1 extended enum; (3) data_completeness_flags values now constrained to SOP §5.5 enum ('manual_only' | 'api_only').",
   "type": "object",
   "required": [
     "company_name",
@@ -12,36 +13,111 @@
     "sources"
   ],
   "properties": {
-    "supplier_id": { "type": ["string", "null"] },
-    "duns_number": { "type": ["string", "null"] },
-    "company_name": { "type": "string", "minLength": 1 },
-    "canonical_name": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
-    "headquarters_location": { "type": ["string", "null"] },
-    "website": { "type": ["string", "null"], "format": "uri" },
-    "company_description": { "type": ["string", "null"] },
-    "industry_sector": { "type": ["string", "null"] },
-    "supply_chain_tier": { "type": "integer", "enum": [1, 2, 3] },
-    "typical_lead_time_days": { "type": ["integer", "null"], "minimum": 0 },
+    "supplier_id": {
+      "type": ["string", "null"],
+      "$comment": "Always null during extraction — assigned by load_to_neo4j.py. SOP §5.1."
+    },
+    "duns_number": {
+      "type": ["string", "null"],
+      "$comment": "null — not in BGS DMQ; may be resolved post-extraction via D&B lookup. SOP §5.1."
+    },
+    "company_name": {
+      "type": "string",
+      "minLength": 1,
+      "$comment": "Copied exactly as printed in DMQ. Do not abbreviate or expand. SOP §5.1."
+    },
+    "canonical_name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$",
+      "$comment": "Lowercase, spaces to hyphens, & to 'and', remove remaining punctuation, keep ltd/plc/llp/uk/group. SOP §7.2. Pattern enforces lowercase-hyphenated form."
+    },
+    "headquarters_location": {
+      "type": ["string", "null"],
+      "$comment": "Format: 'City, Country'. e.g. 'Buxton, United Kingdom'. null if operator address absent. SOP §5.1, §10."
+    },
+    "website": {
+      "type": ["string", "null"],
+      "format": "uri",
+      "$comment": "null from DMQ alone. May be populated post-extraction via web search. SOP §5.1."
+    },
+    "company_description": {
+      "type": ["string", "null"],
+      "$comment": "null from DMQ alone. Optionally populated with brief operator summary from public sources. SOP §5.1."
+    },
+    "industry_sector": {
+      "type": ["string", "null"],
+      "enum": [
+        "construction minerals",
+        "industrial minerals",
+        "building stone",
+        "cement and lime",
+        "coal",
+        "oil and gas",
+        "metals mining",
+        "recycled aggregates",
+        "peat",
+        "mineral handling",
+        null
+      ],
+      "$comment": "FIX (was unconstrained string): Must match SOP §4.3 table exactly. Derived from primary commodity type. Five additional sectors added in SOP v1.1: recycled aggregates, peat, clay/shale (→ industrial minerals), basalt NI (→ construction minerals), igneous & metamorphic rock (→ construction minerals)."
+    },
+    "supply_chain_tier": {
+      "type": "integer",
+      "enum": [1, 2, 3],
+      "$comment": "1 = extraction/peat (default for quarry, mine, pit, brine well, peat workings). 2 = handling/processing/recycling/wharf/spoil heap. 3 = distributor (rare). SOP §4.2."
+    },
+    "typical_lead_time_days": {
+      "type": ["integer", "null"],
+      "minimum": 0,
+      "$comment": "Always null — not stated in DMQ. SOP §5.1."
+    },
     "manufacturing_sites": {
       "type": "array",
-      "items": { "$ref": "#/$defs/site" }
+      "items": { "$ref": "#/$defs/site" },
+      "$comment": "One entry per physical mine/quarry/site operated by this company. SOP §5.2."
     },
-    "certification_references": { "type": "array", "items": { "type": "string" } },
-    "certifications_raw": { "type": ["string", "null"] },
-    "regulation_references": { "type": "array", "items": { "type": "string" } },
+    "certification_references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "$comment": "Empty array [] — not in DMQ. SOP §5.1."
+    },
+    "certifications_raw": {
+      "type": ["string", "null"],
+      "$comment": "null — not in DMQ. SOP §5.1."
+    },
+    "regulation_references": {
+      "type": "array",
+      "items": { "type": "string" },
+      "$comment": "Empty array [] — not in DMQ. SOP §5.1."
+    },
     "products_offered": {
       "type": "array",
-      "items": { "$ref": "#/$defs/product" }
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/product" },
+      "$comment": "One entry per site per commodity per end use. Secondary commodities get their own entries. SOP §5.3, Rule 2."
     },
-    "is_verified": { "type": "boolean" },
+    "is_verified": {
+      "type": "boolean",
+      "$comment": "Always false from scraper — set to true only after human reviewer independently verifies. Rule 6, SOP §5.1."
+    },
     "data_completeness_flags": {
       "type": ["object", "null"],
-      "additionalProperties": { "type": "string" }
+      "properties": {
+        "review_score":          { "type": "string", "enum": ["manual_only", "api_only"] },
+        "defect_rate_ppm":       { "type": "string", "enum": ["manual_only", "api_only"] },
+        "on_time_delivery_rate": { "type": "string", "enum": ["manual_only", "api_only"] },
+        "pricing":               { "type": "string", "enum": ["manual_only", "api_only"] },
+        "inventory_levels":      { "type": "string", "enum": ["manual_only", "api_only"] }
+      },
+      "additionalProperties": false,
+      "$comment": "FIX (was additionalProperties: string with no value constraint): SOP §5.5 defines exactly five flags with exactly two permitted values. review_score=manual_only, defect_rate_ppm=manual_only, on_time_delivery_rate=manual_only, pricing=api_only, inventory_levels=api_only. No other keys or values are permitted."
     },
     "sources": {
       "type": "array",
       "minItems": 1,
-      "items": { "$ref": "#/$defs/source" }
+      "items": { "$ref": "#/$defs/source" },
+      "$comment": "At least one tier1 BGS DMQ entry required. SOP §5.4."
     }
   },
   "$defs": {
@@ -49,36 +125,104 @@
       "type": "object",
       "required": ["location", "country", "raw"],
       "properties": {
-        "location": { "type": "string", "minLength": 1 },
+        "location": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Format: '{Site Name} ({OS Grid Ref})'. e.g. 'Tunstead Quarry (SK089748)'. If site name missing, use 'Unnamed Site ({Grid Ref})'. SOP §5.2, §10."
+        },
         "country": {
           "type": "string",
-          "enum": ["England", "Scotland", "Wales", "Northern Ireland", "Channel Islands", "Isle of Man"]
+          "enum": ["England", "Scotland", "Wales", "Northern Ireland", "Channel Islands", "Isle of Man"],
+          "$comment": "Inferred from BGS region code. CSCT/NSCT/SSCT → Scotland; NIR → Northern Ireland; NWLS/SWLS → Wales; CHA → Channel Islands; IOM → Isle of Man; all others → England. SOP §5.2."
         },
-        "site_type": { "type": ["string", "null"] },
-        "raw": { "type": "string", "minLength": 1 }
+        "site_type": {
+          "type": ["string", "null"],
+          "enum": [
+            "quarry",
+            "mine",
+            "pit",
+            "oil well",
+            "gas well",
+            "brine well",
+            "handling site",
+            "wharf",
+            "processing plant",
+            "spoil heap",
+            "recycling facility",
+            "peat workings",
+            null
+          ],
+          "$comment": "FIX (was unconstrained string): Must use one of the 12 permitted values from SOP §5.2 v1.1 extended list. Original schema had no enum — this allows invalid values to pass validation. Infer from site name and DMQ section heading per SOP §5.2 and §10 edge cases."
+        },
+        "raw": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "REQUIRED. Full verbatim DMQ site record text including MPA, end use, and formation. Never paraphrase. Rule 3."
+        }
       }
     },
     "product": {
       "type": "object",
       "required": ["product_name", "product_id", "category"],
       "properties": {
-        "product_name": { "type": "string", "minLength": 1 },
-        "grade": { "type": ["string", "null"] },
-        "product_id": { "type": "string", "minLength": 1 },
-        "category": { "type": "string", "minLength": 1 },
-        "source_url": { "type": ["string", "null"], "format": "uri" },
-        "datasheet_url": { "type": ["string", "null"], "format": "uri" },
-        "cross_graph_material_id": { "type": ["string", "null"] }
+        "product_name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Commodity name in Title Case. e.g. 'Limestone', 'Silica Sand'. For graded variants, keep base commodity name — do NOT create a separate product_name for graded variants. SOP §5.3, §10."
+        },
+        "grade": {
+          "type": ["string", "null"],
+          "$comment": "End use as grade/variant. e.g. 'Aggregate', 'Chemical', 'Cement raw material'. Graded variants use grade='Graded'. SOP §5.3."
+        },
+        "product_id": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "Format: '{GridRef}_{CommodityAbbrev}'. Secondary commodities use a different suffix. Multiple end uses use different suffixes (e.g. _LS_AGG vs _LS_CEM). Must be unique per site-commodity-grade combination. SOP §5.3."
+        },
+        "category": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "BGS commodity section heading in ALL CAPS. e.g. 'LIMESTONE', 'SILICA SAND', 'FLUORSPAR'. SOP §5.3."
+        },
+        "source_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "$comment": "Always the BGS DMQ 2020 download page: https://www.bgs.ac.uk/mineralsuk/download/directory-of-mines-and-quarries-2020/ — never any other URL. Rule 5."
+        },
+        "datasheet_url": {
+          "type": ["string", "null"],
+          "format": "uri",
+          "$comment": "Always null — PDFs are publication-level, not product-level. SOP §5.3."
+        },
+        "cross_graph_material_id": {
+          "type": ["string", "null"],
+          "$comment": "Always null during extraction — populated post-load by the ID resolver. SOP §5.3."
+        }
       }
     },
     "source": {
       "type": "object",
       "required": ["source_name", "source_url", "tier"],
       "properties": {
-        "source_name": { "type": "string", "minLength": 1 },
-        "source_url": { "type": "string", "format": "uri" },
-        "doi": { "type": ["string", "null"] },
-        "tier": { "type": "string", "enum": ["tier1", "tier2", "tier3"] }
+        "source_name": {
+          "type": "string",
+          "minLength": 1,
+          "$comment": "For BGS DMQ records: 'BGS Directory of Mines and Quarries 2020, 11th Edition'. SOP §5.4."
+        },
+        "source_url": {
+          "type": "string",
+          "format": "uri",
+          "$comment": "Always the BGS DMQ 2020 download page URL. Rule 5."
+        },
+        "doi": {
+          "type": ["string", "null"],
+          "$comment": "null for BGS DMQ. SOP §5.4."
+        },
+        "tier": {
+          "type": "string",
+          "enum": ["tier1", "tier2", "tier3"],
+          "$comment": "BGS DMQ is always tier1 (government/official source). SOP §5.4."
+        }
       }
     }
   }

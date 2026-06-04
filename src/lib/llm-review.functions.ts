@@ -1,7 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 import { generateText } from "ai";
 import { z } from "zod";
-import { createLovableAiGatewayProvider } from "./ai-gateway.server";
+import { createGroqProvider } from "./ai-gateway.server";
 
 const Input = z.object({
   submitted: z.unknown(),
@@ -23,8 +23,8 @@ type ReviewResult = {
 export const llmReview = createServerFn({ method: "POST" })
   .inputValidator((input: unknown) => Input.parse(input))
   .handler(async ({ data }): Promise<ReviewResult> => {
-    const key = process.env.LOVABLE_API_KEY;
-    if (!key) throw new Error("Missing LOVABLE_API_KEY");
+    const key = process.env.GROQ_API_KEY;
+    if (!key) throw new Error("Missing GROQ_API_KEY environment variable. Get one at https://console.groq.com");
 
     // 1. fetch the source page server-side
     let htmlText = "";
@@ -50,8 +50,9 @@ export const llmReview = createServerFn({ method: "POST" })
       };
     }
 
-    const gateway = createLovableAiGatewayProvider(key);
-    const model = gateway("google/gemini-3-flash-preview");
+    const gateway = createGroqProvider(key);
+    // Use mixtral model (fast, high quality, free tier)
+    const model = gateway("mixtral-8x7b-32768");
 
     const prompt = [
       "You are a meticulous data-QA reviewer.",

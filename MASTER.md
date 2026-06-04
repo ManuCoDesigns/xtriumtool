@@ -4,6 +4,14 @@ End-to-end pipeline for validating contractor-submitted JSON datasets (built aro
 the **Xtrium Supplier Graph Schema v1.0** — see `SOP_BGS_to_Xtrium`) and performing
 a final LLM-assisted reconciliation against the original source webpage.
 
+## Features
+
+- **Role-based access control**: Super Admin, Admin, Reviewer, Submitter
+- **User authentication**: Sign up, sign in, manage profile
+- **Dataset submission**: Upload JSON, auto-validate against schema
+- **LLM reconciliation**: Compare submitted data against source HTML
+- **Admin dashboard**: Manage users, assign roles, review submissions
+
 ## 1. Goals
 
 1. Let contractors **submit** one or many JSON records.
@@ -26,20 +34,19 @@ a final LLM-assisted reconciliation against the original source webpage.
 │  - Diff viewer            │        │  /report                 │
 └─────────────┬─────────────┘        └────────────┬─────────────┘
               │                                   │
-              │ server fn (LovableAIGateway)      │ http
+              │ server fn (Groq API)              │ http
               ▼                                   ▼
         ┌──────────────┐                   ┌──────────────┐
-        │  Gemini /    │                   │  Source URL  │
-        │  GPT (AIG)   │                   │  raw HTML    │
+        │  Groq        │                   │  Source URL  │
+        │  (Cloud LLM) │                   │  raw HTML    │
         └──────────────┘                   └──────────────┘
 ```
 
 - **Frontend** owns UX, calls Python for deterministic checks, and calls a
-  TanStack server function (`/api/llm-review`) for the LLM step so the
-  `LOVABLE_API_KEY` stays server-side.
+  TanStack server function (`/api/llm-review`) for the LLM step.
 - **Python backend** owns the heavy validation pipeline + HTML extraction.
-- **LLM** runs through the **Lovable AI Gateway** (`google/gemini-3-flash-preview`
-  by default). No third-party LLM key required.
+- **LLM** runs via **Groq** cloud API (`mixtral-8x7b-32768` model). Free tier available.
+  Works seamlessly for hosted sites with multiple users.
 
 ## 3. Validation Pipeline (Python)
 
@@ -145,6 +152,15 @@ MASTER.md                 This document
 
 ## 6. Running locally
 
+### Prerequisites
+1. **Groq API Key** (free) — Get from https://console.groq.com
+   ```bash
+   # Sign up and create an API key, then set:
+   export GROQ_API_KEY=your_key_here
+   ```
+
+### Setup
+
 ```bash
 # Backend
 cd backend
@@ -152,9 +168,12 @@ python -m venv .venv && source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn main:app --reload --port 8000
 
-# Frontend (this Lovable project)
-# Already wired. Set VITE_VALIDATION_API_URL=http://localhost:8000 if not default.
+# Frontend (in another terminal)
+npm install
+npm run dev
 ```
+
+**Important:** Set `GROQ_API_KEY` environment variable before running. For hosted sites, set this in your deployment platform's environment variables.
 
 ## 7. Extending checks
 
