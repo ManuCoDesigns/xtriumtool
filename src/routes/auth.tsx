@@ -96,6 +96,9 @@ function AuthPage() {
               {busy ? <><Loader2 className="size-4 animate-spin mr-2" /> {mode === "signin" ? "Signing in..." : "Creating account..."}</> : (mode === "signin" ? "Sign in" : "Create account")}
             </Button>
           </form>
+          <div className="mt-4 text-sm text-muted-foreground">
+            <p>Use the local reviewer sign-in form above to access the reviewer queue.</p>
+          </div>
           <div className="mt-6 pt-6 border-t border-border">
             <button
               type="button"

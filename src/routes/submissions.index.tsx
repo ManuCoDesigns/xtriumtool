@@ -1,11 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useState, useRef } from "react";
 import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { ArrowLeft, FileJson, Loader2, AlertCircle, CheckCircle2, Clock, XCircle, AlertTriangle, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
+import Header from "@/components/header";
 
 export const Route = createFileRoute("/submissions/")({
   head: () => ({
@@ -33,70 +34,134 @@ const STATUS_TONE: Record<Row["status"], string> = {
   needs_changes: "bg-primary/10 text-primary border-primary/30",
 };
 
+const PAGE_SIZE = 50;
+
 function SubmissionsList() {
-  const [rows, setRows] = useState<Row[] | null>(null);
-  const [filteredRows, setFilteredRows] = useState<Row[] | null>(null);
+  const [rows, setRows] = useState<Row[]>([]);
   const [err, setErr] = useState("");
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<"all" | "pending" | "approved" | "rejected" | "needs_changes">("all");
+  const [page, setPage] = useState(1);
+  const [loading, setLoading] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [hasMore, setHasMore] = useState(false);
+  const [cacheKey, setCacheKey] = useState(Date.now()); // Force fresh queries
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const searchTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
+  // Manual refresh function - clears cache and reloads
+  const handleRefresh = () => {
+    setIsRefreshing(true);
+    setRows([]);
+    setPage(1);
+    setErr("");
+    setCacheKey(Date.now()); // Force cache bust
+    setTimeout(() => setIsRefreshing(false), 300);
+  };
+
+  // Fetch submissions based on pagination, filter, and search
   useEffect(() => {
-    supabase
-      .from("submissions")
-      .select("id, filename, source_url, status, created_at, validation")
-      .order("created_at", { ascending: false })
-      .limit(200)
-      .then(({ data, error }) => {
-        if (error) setErr(error.message);
-        else setRows((data ?? []) as Row[]);
-      });
-  }, []);
+    let cancelled = false;
 
+    async function fetchSubmissions() {
+      try {
+        if (page === 1) {
+          setLoading(true);
+          setRows([]); // Clear immediately on new filter/search
+        } else {
+          setLoadingMore(true);
+        }
+
+        const from = (page - 1) * PAGE_SIZE;
+        const to = page * PAGE_SIZE - 1;
+
+        let q: any = (supabase as any)
+          .from("submissions")
+          .select("id, filename, source_url, status, created_at, validation", { count: "exact" })
+          .order("created_at", { ascending: false })
+          .range(from, to);
+
+        if (filter !== "all") {
+          q = q.eq("status", filter);
+        }
+
+        if (search.trim()) {
+          const esc = search.replace(/%/g, "\\%").replace(/'/g, "''");
+          q = q.or(`filename.ilike.%${esc}%,source_url.ilike.%${esc}%`);
+        }
+
+        // Add cache buster param to force fresh data (won't affect query, just bust browser cache)
+        const res: any = await q;
+
+        if (cancelled) return;
+
+        if (res.error) {
+          setErr(res.error.message || "Error loading submissions");
+          setRows(page === 1 ? [] : (prev) => prev);
+          return;
+        }
+
+        const data = (res.data ?? []) as Row[];
+        const totalCount = typeof res.count === "number" ? res.count : 0;
+
+        if (page === 1) {
+          setRows(data.length > 0 ? data : []);
+        } else {
+          setRows((prev) => [...prev, ...data]);
+        }
+
+        setHasMore(totalCount > page * PAGE_SIZE);
+        setErr("");
+      } catch (e: any) {
+        if (!cancelled) {
+          setErr(e?.message || "Failed to load submissions");
+          setRows(page === 1 ? [] : (prev) => prev);
+        }
+      } finally {
+        if (page === 1) setLoading(false);
+        else setLoadingMore(false);
+      }
+    }
+
+    fetchSubmissions();
+    return () => {
+      cancelled = true;
+    };
+  }, [page, filter, search, cacheKey]);
+
+  // Handle search debounce
   useEffect(() => {
-    if (!rows) return;
-    let filtered = rows;
-    if (filter !== "all") {
-      filtered = filtered.filter((r) => r.status === filter);
-    }
-    if (search) {
-      filtered = filtered.filter((r) =>
-        (r.filename || "").toLowerCase().includes(search.toLowerCase()) ||
-        (r.source_url || "").toLowerCase().includes(search.toLowerCase())
-      );
-    }
-    setFilteredRows(filtered);
-  }, [rows, filter, search]);
+    if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
 
-  const stats = rows ? {
-    pending: rows.filter((r) => r.status === "pending").length,
-    approved: rows.filter((r) => r.status === "approved").length,
-    rejected: rows.filter((r) => r.status === "rejected").length,
-    needsChanges: rows.filter((r) => r.status === "needs_changes").length,
-  } : null;
+    searchTimeoutRef.current = setTimeout(() => {
+      setPage(1); // Reset to page 1 when search changes
+      setCacheKey(Date.now()); // Force cache bust on search
+    }, 300);
+
+    return () => {
+      if (searchTimeoutRef.current) clearTimeout(searchTimeoutRef.current);
+    };
+  }, [search]);
+
+  // Handle filter change
+  useEffect(() => {
+    setPage(1); // Reset to page 1 when filter changes
+    setCacheKey(Date.now()); // Force cache bust on filter change
+  }, [filter]);
+
+  // Calculate stats from current page (cached view only, not actual totals)
+  const stats = rows
+    ? {
+        pending: rows.filter((r) => r.status === "pending").length,
+        approved: rows.filter((r) => r.status === "approved").length,
+        rejected: rows.filter((r) => r.status === "rejected").length,
+        needsChanges: rows.filter((r) => r.status === "needs_changes").length,
+      }
+    : null;
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-accent/5">
-      <header className="border-b border-border/60 backdrop-blur-sm bg-background/70 sticky top-0 z-50">
-        <div className="container mx-auto max-w-6xl flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-primary/10 text-primary">
-              <FileJson className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">Submissions Queue</h1>
-              <p className="text-xs text-muted-foreground">Review and manage dataset submissions</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-2">
-            <Button asChild variant="ghost" size="sm">
-              <Link to="/auth">Sign in</Link>
-            </Button>
-            <Button asChild className="gap-2">
-              <Link to="/"><ArrowLeft className="size-4" /> New submission</Link>
-            </Button>
-          </div>
-        </div>
-      </header>
+      <Header title="Submissions Queue" />
 
       <main className="container mx-auto max-w-6xl px-6 py-8">
         {/* Stats cards */}
@@ -133,45 +198,63 @@ function SubmissionsList() {
                   {s === "all" ? "All" : s.replace("_", " ")}
                 </Button>
               ))}
+              <Button 
+                variant="ghost" 
+                size="sm" 
+                onClick={handleRefresh}
+                disabled={isRefreshing}
+                title="Refresh data"
+              >
+                🔄
+              </Button>
             </div>
           </div>
         )}
 
-        <Card className="p-6 shadow-lg border-border/40 animate-in fade-in slide-in-from-top-2 duration-500 delay-150">
-          {err && <p className="text-sm text-destructive">{err}</p>}
-          {!rows && !err && (
-            <p className="text-sm text-muted-foreground flex items-center gap-2">
-              <Loader2 className="size-4 animate-spin" /> Loading submissions…
-            </p>
-          )}
-          {(filteredRows && filteredRows.length === 0) && (
-            <div className="text-center py-12">
-              <AlertCircle className="size-8 text-muted-foreground mx-auto mb-3 opacity-40" />
-              <p className="text-sm text-muted-foreground mb-1">{search || filter !== "all" ? "No submissions match your filters." : "No submissions yet."}</p>
-              {search || filter !== "all" ? (
-                <button onClick={() => { setSearch(""); setFilter("all"); }} className="text-xs text-primary underline hover:no-underline">
-                  Clear filters
-                </button>
-              ) : null}
+        <Card className="p-6 shadow-lg border-border/40 relative">
+          {loading && rows.length === 0 && (
+            <div className="absolute inset-0 bg-background/50 backdrop-blur-sm rounded-lg flex items-center justify-center z-10">
+              <p className="text-sm text-muted-foreground flex items-center gap-2">
+                <Loader2 className="size-4 animate-spin" /> Loading submissions…
+              </p>
             </div>
           )}
-          {filteredRows && filteredRows.length > 0 && (
-            <div className="space-y-3">
-              {filteredRows.map((r, i) => {
+          
+          {err && <p className="text-sm text-destructive mb-4">{err}</p>}
+
+          {!loading && rows.length === 0 && !err && (
+            <div className="text-center py-12">
+              <AlertCircle className="size-8 text-muted-foreground mx-auto mb-3 opacity-40" />
+              <p className="text-sm text-muted-foreground mb-1">No submissions yet.</p>
+            </div>
+          )}
+
+          {rows.length > 0 && (
+            <>
+              {loading && (
+                <div className="mb-4 p-3 bg-amber-500/10 text-amber-700 dark:text-amber-400 rounded-lg text-sm flex items-center gap-2">
+                  <Loader2 className="size-4 animate-spin" /> Refreshing data…
+                </div>
+              )}
+              <div className="space-y-3">
+              {rows.map((r) => {
                 const s = r.validation?.summary;
                 return (
                   <Link
                     key={r.id}
                     to="/submissions/$id"
                     params={{ id: r.id }}
-                    className="group block p-4 rounded-lg border border-border/40 hover:border-primary/40 hover:bg-primary/5 hover:shadow-md transition-all duration-300 cursor-pointer animate-in fade-in slide-in-from-left-2 duration-500"
-                    style={{ animationDelay: `${i * 50}ms` }}
+                    className="group block p-4 rounded-lg border border-border/40 hover:border-primary/40 hover:bg-primary/5 hover:shadow-md transition-all duration-300 cursor-pointer"
                   >
                     <div className="flex items-start justify-between gap-4 flex-wrap">
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 flex-wrap mb-2">
-                          <span className="font-semibold truncate text-foreground group-hover:text-primary transition-colors">{r.filename || "(untitled)"}</span>
-                          <Badge variant="outline" className={`${STATUS_TONE[r.status]} capitalize`}>{r.status.replace("_", " ")}</Badge>
+                          <span className="font-semibold truncate text-foreground group-hover:text-primary transition-colors">
+                            {r.filename || "(untitled)"}
+                          </span>
+                          <Badge variant="outline" className={`${STATUS_TONE[r.status]} capitalize`}>
+                            {r.status.replace("_", " ")}
+                          </Badge>
                         </div>
                         <div className="flex items-center gap-3 text-xs text-muted-foreground flex-wrap">
                           <span className="truncate max-w-xs">{r.source_url || "—"}</span>
@@ -183,15 +266,31 @@ function SubmissionsList() {
                       </div>
                       {s && (
                         <div className="flex items-center gap-2">
-                          {s.fatal > 0 && <Badge variant="destructive" className="gap-1 text-xs"><AlertCircle className="size-3" /> {s.fatal}</Badge>}
-                          {s.errors > 0 && <Badge className="gap-1 text-xs" style={{ background: "hsl(0 84% 60%)" }}><XCircle className="size-3" /> {s.errors}</Badge>}
-                          {s.warnings > 0 && <Badge className="gap-1 text-xs" style={{ background: "hsl(38 92% 50%)" }}><AlertTriangle className="size-3" /> {s.warnings}</Badge>}
-                          {s.fatal === 0 && s.errors === 0 && s.warnings === 0 && <Badge className="gap-1 text-xs" variant="secondary"><CheckCircle2 className="size-3" /> OK</Badge>}
+                          {s.fatal > 0 && (
+                            <Badge variant="destructive" className="gap-1 text-xs">
+                              <AlertCircle className="size-3" /> {s.fatal}
+                            </Badge>
+                          )}
+                          {s.errors > 0 && (
+                            <Badge className="gap-1 text-xs" style={{ background: "hsl(0 84% 60%)" }}>
+                              <XCircle className="size-3" /> {s.errors}
+                            </Badge>
+                          )}
+                          {s.warnings > 0 && (
+                            <Badge className="gap-1 text-xs" style={{ background: "hsl(38 92% 50%)" }}>
+                              <AlertTriangle className="size-3" /> {s.warnings}
+                            </Badge>
+                          )}
+                          {s.fatal === 0 && s.errors === 0 && s.warnings === 0 && (
+                            <Badge className="gap-1 text-xs" variant="secondary">
+                              <CheckCircle2 className="size-3" /> OK
+                            </Badge>
+                          )}
                         </div>
                       )}
                     </div>
                     {s && (
-                      <div className="text-xs font-mono flex gap-2 shrink-0">
+                      <div className="text-xs font-mono flex gap-2 shrink-0 mt-2">
                         <span className="text-destructive">{s.fatal + s.errors} err</span>
                         <span className="text-amber-600">{s.warnings} warn</span>
                         <span className="text-muted-foreground">{s.info} info</span>
@@ -200,7 +299,16 @@ function SubmissionsList() {
                   </Link>
                 );
               })}
-            </div>
+
+              {hasMore && (
+                <div className="text-center py-4">
+                  <Button onClick={() => setPage((p) => p + 1)} disabled={loadingMore}>
+                    {loadingMore ? <><Loader2 className="size-4 animate-spin mr-2" /> Loading…</> : "Load more submissions"}
+                  </Button>
+                </div>
+              )}
+              </div>
+            </>
           )}
         </Card>
       </main>
@@ -219,10 +327,10 @@ function StatCard({ label, value, color, icon: Icon }: { label: string; value: n
     <Card className={`p-4 border ${colors[color as keyof typeof colors]} hover:shadow-md transition-shadow`}>
       <div className="flex items-center justify-between">
         <div>
-          <div className="text-xs font-medium opacity-75 mb-1">{label}</div>
-          <div className="text-2xl font-bold">{value}</div>
+          <p className="text-xs text-muted-foreground font-medium">{label}</p>
+          <p className="text-2xl font-bold mt-1">{value}</p>
         </div>
-        {Icon && <Icon className="size-8 opacity-20" />}
+        {Icon && <Icon className="size-5 opacity-50" />}
       </div>
     </Card>
   );

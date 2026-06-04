@@ -1,6 +1,7 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { isMissingTableError } from "@/integrations/supabase/db-utils";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -12,6 +13,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { ArrowLeft, Loader2, Shield, Users } from "lucide-react";
+import Header from "@/components/header";
 
 export const Route = createFileRoute("/admin/users")({
   head: () => ({
@@ -64,11 +66,20 @@ function AdminUsers() {
     }
 
     // Check if user is admin
-    const { data: profile } = await supabase
-      .from("profiles")
+    const { data: profile, error } = await supabase
+      .from("profiles" as any)
       .select("*")
       .eq("id", u.user.id)
       .single();
+
+    if (error) {
+      if (isMissingTableError(error)) {
+        setErr("User management is unavailable until the database schema is initialized.");
+        return;
+      }
+      setErr(error.message);
+      return;
+    }
 
     if (!profile || !["super_admin", "admin"].includes(profile.role)) {
       setErr("You don't have permission to access this page.");
@@ -81,12 +92,17 @@ function AdminUsers() {
 
   async function loadUsers() {
     const { data, error } = await supabase
-      .from("profiles")
+      .from("profiles" as any)
       .select("id, email, full_name, role, created_at")
       .order("created_at", { ascending: false });
 
     if (error) {
-      setErr(error.message);
+      if (isMissingTableError(error)) {
+        setErr("User list unavailable until the database schema is initialized.");
+        setUsers([]);
+      } else {
+        setErr(error.message);
+      }
     } else {
       setUsers(data as UserProfile[]);
     }
@@ -100,7 +116,12 @@ function AdminUsers() {
         .update({ role: newRole, updated_at: new Date().toISOString() })
         .eq("id", userId);
 
-      if (error) throw error;
+      if (error) {
+        if (isMissingTableError(error)) {
+          throw new Error("User updates are unavailable until the database schema is initialized.");
+        }
+        throw error;
+      }
       
       // Reload users
       await loadUsers();
@@ -134,24 +155,7 @@ function AdminUsers() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-accent/5">
-      <header className="border-b border-border/60 backdrop-blur-sm bg-background/70 sticky top-0 z-50">
-        <div className="container mx-auto max-w-6xl flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-primary/10 text-primary">
-              <Shield className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">User Management</h1>
-              <p className="text-xs text-muted-foreground">Manage users and assign roles</p>
-            </div>
-          </div>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/submissions">
-              <ArrowLeft className="size-4" /> Back
-            </Link>
-          </Button>
-        </div>
-      </header>
+      <Header title="User Management" />
 
       <main className="container mx-auto max-w-6xl px-6 py-8">
         <Card className="p-6 mb-6 shadow-lg border-border/40 bg-gradient-to-r from-primary/5 to-accent/5">

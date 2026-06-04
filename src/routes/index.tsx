@@ -1,12 +1,14 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import { useServerFn } from "@tanstack/react-start";
 import { useDropzone } from "react-dropzone";
 import { diffLines } from "diff";
 import {
-  AlertTriangle, CheckCircle2, FileJson, Loader2, Sparkles, XCircle, Info, Send, Inbox, LogOut, Settings, User,
+  AlertTriangle, CheckCircle2, FileJson, Loader2, Sparkles, XCircle, Info, Send, Inbox, LogOut, Settings, User, Bell,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
+import { Textarea } from "@/components/ui/textarea";
+import Header from "@/components/header";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -15,6 +17,7 @@ import { validate, type Finding } from "@/lib/validation/checks";
 import { SCHEMA_REGISTRY, type SchemaId } from "@/lib/validation/schema";
 import { llmReview } from "@/lib/llm-review.functions";
 import { supabase } from "@/integrations/supabase/client";
+import { isMissingColumnError, isMissingTableError } from "@/integrations/supabase/db-utils";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -44,6 +47,9 @@ function Index() {
   const [sourceUrl, setSourceUrl] = useState<string>("");
   const [submittedBy, setSubmittedBy] = useState<string>("");
   const [schemaId, setSchemaId] = useState<SchemaId>("bgs_supplier_graph_v1");
+  const [schemaOverride, setSchemaOverride] = useState<string>(JSON.stringify(SCHEMA_REGISTRY["bgs_supplier_graph_v1"].schema, null, 2));
+  const [schemaOverrideError, setSchemaOverrideError] = useState<string>("");
+  const [schemaEditorOpen, setSchemaEditorOpen] = useState(false);
   const [result, setResult] = useState<ValidationResult | null>(null);
   const [parseError, setParseError] = useState<string>("");
   const [llmLoading, setLlmLoading] = useState(false);
@@ -53,11 +59,15 @@ function Index() {
   const [llmResult, setLlmResult] = useState<{
     corrected: unknown; changes: Array<{ path: string; reason: string; before?: unknown; after?: unknown }>; error?: string;
   } | null>(null);
+  const [userRole, setUserRole] = useState<string>("");
+
+  const LazyDiffView = lazy(() => import("@/components/diff-view"));
 
   // Auth state
   const [user, setUser] = useState<{ id: string; email: string } | null>(null);
   const [userProfile, setUserProfile] = useState<{ id: string; email: string; full_name: string | null; role: string } | null>(null);
   const [authLoading, setAuthLoading] = useState(true);
+  const [submissionCount, setSubmissionCount] = useState<number>(0);
 
   const callLlm = useServerFn(llmReview);
 
@@ -72,15 +82,47 @@ function Index() {
       if (authUser.user) {
         setUser({ id: authUser.user.id, email: authUser.user.email || "" });
         
-        const { data: profile } = await supabase
-          .from("profiles")
+        const { data: profile, error: profileError } = await supabase
+          .from("profiles" as any)
           .select("id, email, full_name, role")
           .eq("id", authUser.user.id)
           .single();
-        
-        if (profile) {
-          setUserProfile(profile);
-          setSubmittedBy(profile.full_name || profile.email);
+
+          if (profile) {
+            const profileRecord = profile as any;
+            setUserProfile(profileRecord);
+            setSubmittedBy(profileRecord.full_name || profileRecord.email);
+        } else if (isMissingTableError(profileError)) {
+          setUserProfile(null);
+          setSubmittedBy(authUser.user.email || "");
+        }
+          useEffect(() => {
+            setSchemaOverride(JSON.stringify(SCHEMA_REGISTRY[schemaId].schema, null, 2));
+            setSchemaOverrideError("");
+          }, [schemaId]);
+        // load user's submission count for notifications
+        try {
+          const { data: userSubs, error: cntErr } = await supabase
+            .from("submissions" as any)
+            .select("id")
+            .eq("user_id", authUser.user.id)
+            .order("created_at", { ascending: false })
+            .limit(1000);
+          if (!cntErr && userSubs) setSubmissionCount((userSubs as any[]).length || 0);
+          else if (isMissingColumnError(cntErr)) {
+            const email = authUser.user.email || "";
+            if (email) {
+              const { data: fallbackSubs, error: fallbackErr } = await supabase
+                .from("submissions" as any)
+                .select("id")
+                .eq("submitted_by", email)
+                .order("created_at", { ascending: false })
+                .limit(1000);
+              if (!fallbackErr && fallbackSubs) setSubmissionCount((fallbackSubs as any[]).length || 0);
+            }
+          }
+        } catch (e) {
+          console.warn("Failed to load submission count", e);
         }
       }
     } catch (err) {
@@ -89,6 +131,11 @@ function Index() {
       setAuthLoading(false);
     }
   }
+
+  useEffect(() => {
+    setSchemaOverride(JSON.stringify(SCHEMA_REGISTRY[schemaId].schema, null, 2));
+    setSchemaOverrideError("");
+  }, [schemaId]);
 
   async function handleSignOut() {
     await supabase.auth.signOut();
@@ -122,7 +169,17 @@ function Index() {
   function runValidation() {
     if (parsed === null) return;
     setLlmResult(null);
-    setResult(validate(parsed, SCHEMA_REGISTRY[schemaId].schema));
+    let activeSchema = SCHEMA_REGISTRY[schemaId].schema;
+    if (schemaOverride.trim()) {
+      try {
+        activeSchema = JSON.parse(schemaOverride);
+        setSchemaOverrideError("");
+      } catch (error) {
+        setSchemaOverrideError((error as Error).message);
+        return;
+      }
+    }
+    setResult(validate(parsed, activeSchema));
   }
 
   async function runLlmReview() {
@@ -146,22 +203,38 @@ function Index() {
     }
     setSubmitting(true);
     setSubmitErr("");
-    const { data, error } = await supabase
-      .from("submissions")
-      .insert({
-        user_id: user.id,
-        filename: filename || null,
-        source_url: sourceUrl || null,
-        schema_id: schemaId,
-        payload: parsed,
-        validation: (result ?? null) as never,
-        submitted_by: submittedBy || user.email,
-        submitted_by_name: userProfile?.full_name || submittedBy || user.email,
-      })
+    const payload = {
+      user_id: user.id,
+      filename: filename || null,
+      source_url: sourceUrl || null,
+      schema_id: schemaId,
+      payload: parsed,
+      validation: (result ?? null) as never,
+      submitted_by: submittedBy || user.email,
+      submitted_by_name: userProfile?.full_name || submittedBy || user.email,
+    };
+
+    let insertResult = await supabase
+      .from("submissions" as any)
+      .insert(payload as any)
       .select("id")
       .single();
+
+    if (insertResult.error && isMissingColumnError(insertResult.error)) {
+      const fallbackPayload = { ...payload };
+      delete (fallbackPayload as any).user_id;
+      insertResult = await supabase
+        .from("submissions")
+        .insert(fallbackPayload)
+        .select("id")
+        .single();
+    }
+
     setSubmitting(false);
-    if (error) { setSubmitErr(error.message); return; }
+    if (insertResult.error) {
+      setSubmitErr(insertResult.error.message);
+      return;
+    }
     navigate({ to: "/submissions/$id", params: { id: data.id } });
   }
 
@@ -172,57 +245,7 @@ function Index() {
         className="pointer-events-none absolute inset-x-0 top-0 h-[420px] opacity-40 blur-3xl"
         style={{ background: "var(--gradient-primary)" }}
       />
-      <header className="border-b border-border/60 backdrop-blur-sm bg-background/70 relative">
-        <div className="container mx-auto max-w-6xl flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div
-              className="grid place-items-center size-9 rounded-lg text-white shadow-lg"
-              style={{ background: "var(--gradient-primary)", boxShadow: "var(--shadow-glow)" }}
-            >
-              <FileJson className="size-5" />
-            </div>
-            <h1 className="text-lg font-semibold tracking-tight bg-clip-text text-transparent"
-                style={{ backgroundImage: "var(--gradient-primary)" }}>
-              Xtrium Dataset Validator
-            </h1>
-          </div>
-          <div className="flex items-center gap-2">
-            {authLoading ? (
-              <Loader2 className="size-4 animate-spin text-muted-foreground" />
-            ) : user ? (
-              <>
-                <div className="text-xs text-right mr-2 hidden sm:block">
-                  <p className="font-medium">{userProfile?.full_name || user.email}</p>
-                  <p className="text-muted-foreground">{userProfile?.role}</p>
-                </div>
-                {userProfile?.role === "admin" || userProfile?.role === "super_admin" ? (
-                  <Button asChild variant="ghost" size="sm">
-                    <Link to="/admin/users" title="Admin">
-                      <Settings className="size-4" />
-                    </Link>
-                  </Button>
-                ) : null}
-                <Button asChild variant="ghost" size="sm">
-                  <Link to="/profile" title="Profile">
-                    <User className="size-4" />
-                  </Link>
-                </Button>
-                <Button variant="ghost" size="sm" onClick={handleSignOut} title="Sign out">
-                  <LogOut className="size-4" />
-                </Button>
-              </>
-            ) : (
-              <Button asChild variant="outline" size="sm">
-                <Link to="/auth">Sign in</Link>
-              </Button>
-            )}
-            <Button asChild variant="outline" size="sm">
-              <Link to="/submissions"><Inbox className="size-4" /> Reviewer queue</Link>
-            </Button>
-            <Badge className="font-mono text-xs text-white border-0" style={{ background: "var(--gradient-primary)" }}>v1.0</Badge>
-          </div>
-        </div>
-      </header>
+      <Header />
 
       <main className="container mx-auto max-w-6xl px-6 py-8 space-y-6 relative">
         <section className="grid gap-6 lg:grid-cols-[1fr_360px]">
@@ -249,6 +272,32 @@ function Index() {
                   <option key={id} value={id}>{s.label}</option>
                 ))}
               </select>
+              <div className="mt-3 flex flex-col gap-2">
+                <div className="flex items-center justify-between gap-2">
+                  <Button type="button" variant="ghost" size="sm" onClick={() => setSchemaEditorOpen((open) => !open)}>
+                    {schemaEditorOpen ? "Hide schema editor" : "Edit schema"}
+                  </Button>
+                  {schemaOverrideError && <p className="text-xs text-destructive">{schemaOverrideError}</p>}
+                </div>
+                {schemaEditorOpen && (
+                  <div className="space-y-2">
+                    <Label htmlFor="schemaOverride">Schema override</Label>
+                    <Textarea
+                      id="schemaOverride"
+                      value={schemaOverride}
+                      onChange={(e) => setSchemaOverride(e.target.value)}
+                      rows={10}
+                      className="w-full font-mono text-xs"
+                    />
+                    <p className="text-xs text-muted-foreground">
+                      {userProfile?.role === "reviewer" || userProfile?.role === "admin" || userProfile?.role === "super_admin"
+                        ? "Reviewers and admins can edit the active schema for validation checks."
+                        : "Submitters can use a local schema override when validating their payload."
+                      }
+                    </p>
+                  </div>
+                )}
+              </div>
               <p className="text-xs text-muted-foreground">{SCHEMA_REGISTRY[schemaId].description}</p>
             </div>
             <div
@@ -375,11 +424,9 @@ function Index() {
             <p className="text-xs text-destructive">{llmResult.error}</p>
           )}
           {llmResult && !llmResult.error && (
-            <DiffView
-              before={parsed}
-              after={llmResult.corrected}
-              changes={llmResult.changes}
-            />
+            <Suspense fallback={<div className="text-sm text-muted-foreground">Loading diff…</div>}>
+              <LazyDiffView before={parsed} after={llmResult.corrected} changes={llmResult.changes} />
+            </Suspense>
           )}
         </Card>
 
@@ -400,7 +447,7 @@ function Index() {
                 You must sign in to submit datasets.
               </p>
               <Button asChild className="w-full">
-                <Link to="/auth">Sign in or create account</Link>
+                <a href="/auth">Sign in or create account</a>
               </Button>
             </div>
           ) : (
@@ -478,65 +525,7 @@ function FindingRow({ finding }: { finding: Finding }) {
   );
 }
 
-function DiffView({
-  before, after, changes,
-}: {
-  before: unknown; after: unknown;
-  changes: Array<{ path: string; reason: string; before?: unknown; after?: unknown }>;
-}) {
-  const a = JSON.stringify(before, null, 2);
-  const b = JSON.stringify(after, null, 2);
-  const parts = diffLines(a, b);
-  return (
-    <div className="space-y-4">
-      {changes.length > 0 && (
-        <div className="space-y-1.5">
-          <h3 className="text-sm font-medium">LLM-proposed changes ({changes.length})</h3>
-          <ul className="space-y-1">
-            {changes.map((c, i) => (
-              <li key={i} className="text-xs rounded-md border border-border px-2.5 py-1.5">
-                <code className="font-mono">{c.path}</code> — {c.reason}
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
-      <div className="rounded-md border border-border overflow-hidden">
-        <div className="bg-muted px-3 py-1.5 text-xs font-medium border-b border-border flex justify-between">
-          <span>Submitted</span><span>← / →</span><span>LLM corrected</span>
-        </div>
-        <pre className="font-mono text-xs leading-relaxed max-h-[500px] overflow-auto">
-          {parts.map((p, i) => (
-            <div
-              key={i}
-              className={
-                p.added ? "bg-green-500/10 text-green-800 dark:text-green-300"
-                : p.removed ? "bg-red-500/10 text-red-800 dark:text-red-300"
-                : "text-foreground"
-              }
-            >
-              {p.value.split("\n").filter((_, j, arr) => j < arr.length - 1 || arr.length === 1).map((line, k) => (
-                <div key={k} className="px-3">
-                  <span className="select-none opacity-50 mr-2">
-                    {p.added ? "+" : p.removed ? "-" : " "}
-                  </span>{line}
-                </div>
-              ))}
-            </div>
-          ))}
-        </pre>
-      </div>
-      <div className="flex gap-2">
-        <Button onClick={() => navigator.clipboard.writeText(JSON.stringify(after, null, 2))}>
-          Copy LLM version
-        </Button>
-        <Button variant="outline" onClick={() => navigator.clipboard.writeText(JSON.stringify(before, null, 2))}>
-          Copy submitted version
-        </Button>
-      </div>
-    </div>
-  );
-}
+// DiffView moved to a lazily-loaded component at `src/components/diff-view.tsx`
 
 const BGS_SAMPLE = JSON.stringify({
   supplier_id: null,

@@ -1,11 +1,13 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
-import { useEffect, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { SCHEMA_REGISTRY } from "@/lib/validation/schema";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
 import { ArrowLeft, CheckCircle2, Loader2, XCircle, AlertTriangle, Info } from "lucide-react";
+import Header from "@/components/header";
 import type { Finding } from "@/lib/validation/checks";
 
 export const Route = createFileRoute("/submissions/$id")({
@@ -41,10 +43,43 @@ type Submission = {
 const SEV_STYLE: Record<Finding["severity"], string> = {
   fatal: "bg-destructive/15 text-destructive border-destructive/30",
   error: "bg-destructive/10 text-destructive border-destructive/20",
-  warn: "bg-amber-500/10 text-amber-700 dark:text-amber-400 border-amber-500/30",
+  warn: "bg-amber-500/10 text-amber-500 dark:text-amber-400 border-amber-500/30",
   info: "bg-muted text-muted-foreground border-border",
   review: "bg-primary/10 text-primary border-primary/30",
 };
+
+function orderPayloadBySchema(payload: unknown, schema: unknown): unknown {
+  if (Array.isArray(payload)) {
+    if (schema && typeof schema === "object" && "items" in schema) {
+      return payload.map((item) => orderPayloadBySchema(item, (schema as any).items));
+    }
+    return payload.map((item) => orderPayloadBySchema(item, {}));
+  }
+
+  if (payload && typeof payload === "object") {
+    const schemaProps = schema && typeof schema === "object" && typeof (schema as any).properties === "object" ? (schema as any).properties : {};
+    const ordered: Record<string, unknown> = {};
+
+    const schemaKeys = Object.keys(schemaProps);
+    const payloadKeys = Object.keys(payload as Record<string, unknown>);
+
+    for (const key of schemaKeys) {
+      if (Object.prototype.hasOwnProperty.call(payload, key)) {
+        ordered[key] = orderPayloadBySchema((payload as any)[key], schemaProps[key]);
+      }
+    }
+
+    for (const key of payloadKeys) {
+      if (!schemaKeys.includes(key)) {
+        ordered[key] = orderPayloadBySchema((payload as any)[key], {});
+      }
+    }
+
+    return ordered;
+  }
+
+  return payload;
+}
 
 function SubmissionDetail() {
   const { id } = Route.useParams();
@@ -56,8 +91,8 @@ function SubmissionDetail() {
   const [signedIn, setSignedIn] = useState(false);
 
   useEffect(() => {
-    supabase.from("submissions").select("*").eq("id", id).single()
-      .then(({ data, error }) => {
+    (supabase.from("submissions" as any) as any).select("*").eq("id", id).single()
+      .then(({ data, error }: any) => {
         if (error) setErr(error.message);
         else {
           setSub(data as Submission);
@@ -78,16 +113,19 @@ function SubmissionDetail() {
         .select("role")
         .eq("user_id", u.user.id);
       if (cancelled) return;
-      setIsReviewer(!!roles?.some((r) => r.role === "reviewer" || r.role === "admin"));
+      setIsReviewer(!!roles?.some((r) => r.role === "reviewer" || r.role === "admin" || r.role === "super_admin"));
     }
     check();
-    const { data: sub } = supabase.auth.onAuthStateChange(() => check());
-    return () => { cancelled = true; sub.subscription.unsubscribe(); };
+    const { data: authListener } = supabase.auth.onAuthStateChange(() => check());
+    return () => {
+      cancelled = true;
+      authListener?.subscription?.unsubscribe?.();
+    };
   }, []);
 
   async function setStatus(status: Status) {
     setSaving(status);
-    const { error } = await supabase.from("submissions").update({ status }).eq("id", id);
+    const { error } = await (supabase.from("submissions" as any) as any).update({ status }).eq("id", id);
     setSaving(null);
     if (error) setErr(error.message);
     else setSub((s) => (s ? { ...s, status } : s));
@@ -95,7 +133,7 @@ function SubmissionDetail() {
 
   async function saveNotes() {
     setSaving("notes");
-    const { error } = await supabase.from("submissions").update({ reviewer_notes: notes }).eq("id", id);
+    const { error } = await (supabase.from("submissions" as any) as any).update({ reviewer_notes: notes }).eq("id", id);
     setSaving(null);
     if (error) setErr(error.message);
   }
@@ -105,6 +143,8 @@ function SubmissionDetail() {
 
   const findings = sub.validation?.findings ?? [];
   const s = sub.validation?.summary;
+  const schema = sub.schema_id ? SCHEMA_REGISTRY[sub.schema_id]?.schema : undefined;
+  const orderedPayload = useMemo(() => orderPayloadBySchema(sub.payload, schema), [sub.payload, schema]);
 
   return (
     <Shell>
@@ -122,7 +162,7 @@ function SubmissionDetail() {
             </div>
             <Badge variant="outline" className="capitalize">{sub.status.replace("_", " ")}</Badge>
           </div>
-          {s && (
+          {isReviewer && s && (
             <div className="grid grid-cols-4 gap-2 text-sm">
               <Stat label="Fatal" value={s.fatal} tone="err" />
               <Stat label="Errors" value={s.errors} tone="err" />
@@ -149,7 +189,7 @@ function SubmissionDetail() {
             <p className="text-xs text-muted-foreground pt-2">
               {signedIn
                 ? "Your account doesn't have the reviewer role yet. Ask an admin to grant it."
-                : <>Reviewer actions require sign-in. <Link to="/auth" className="underline">Sign in</Link>.</>}
+                : <>Reviewer actions require sign-in. <a href="/auth" className="underline">Sign in</a>.</>}
             </p>
           )}
         </Card>
@@ -172,38 +212,50 @@ function SubmissionDetail() {
           )}
         </Card>
 
-        {findings.length > 0 && (
-          <Card className="p-6 space-y-3">
-            <h3 className="font-semibold text-sm">Findings ({findings.length})</h3>
-            <div className="space-y-2 max-h-[420px] overflow-y-auto">
-              {findings.map((f, i) => {
-                const Icon = f.severity === "warn" ? AlertTriangle : f.severity === "info" ? Info : XCircle;
-                return (
-                  <div key={i} className={`rounded-md border px-3 py-2 text-sm ${SEV_STYLE[f.severity]}`}>
-                    <div className="flex items-start gap-2">
-                      <Icon className="size-4 mt-0.5 shrink-0" />
-                      <div className="min-w-0 flex-1">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <code className="text-xs font-mono">{f.code}</code>
-                          <code className="text-xs font-mono opacity-70 truncate">{f.path}</code>
+        {isReviewer ? (
+          <>
+            {findings.length > 0 && (
+              <Card className="p-6 space-y-3">
+                <h3 className="font-semibold text-sm">Findings ({findings.length})</h3>
+                <div className="space-y-2 max-h-[420px] overflow-y-auto">
+                  {findings.map((f, i) => {
+                    const Icon = f.severity === "warn" ? AlertTriangle : f.severity === "info" ? Info : XCircle;
+                    return (
+                      <div key={i} className={`rounded-md border px-3 py-2 text-sm ${SEV_STYLE[f.severity]}`}>
+                        <div className="flex items-start gap-2">
+                          <Icon className="size-4 mt-0.5 shrink-0" />
+                          <div className="min-w-0 flex-1">
+                            <div className="flex items-center gap-2 flex-wrap">
+                              <code className="text-xs font-mono">{f.code}</code>
+                              <code className="text-xs font-mono opacity-70 truncate">{f.path}</code>
+                            </div>
+                            <p className="mt-0.5">{f.message}</p>
+                            {f.suggestion && <p className="mt-1 text-xs opacity-80">→ {f.suggestion}</p>}
+                          </div>
                         </div>
-                        <p className="mt-0.5">{f.message}</p>
-                        {f.suggestion && <p className="mt-1 text-xs opacity-80">→ {f.suggestion}</p>}
                       </div>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
+                    );
+                  })}
+                </div>
+              </Card>
+            )}
+
+            <Card className="p-6 space-y-2">
+              <div className="flex items-center justify-between gap-4">
+                <h3 className="font-semibold text-sm">Submitted payload</h3>
+                <Badge variant="outline">Schema: {sub.schema_id || "unknown"}</Badge>
+              </div>
+              <pre className="font-mono text-xs bg-muted rounded-md p-3 max-h-[500px] overflow-auto">
+                {JSON.stringify(orderedPayload, null, 2)}
+              </pre>
+            </Card>
+          </>
+        ) : (
+          <Card className="p-6 space-y-2">
+            <h3 className="font-semibold text-sm">Submission details</h3>
+            <p className="text-sm text-muted-foreground">Detailed payload and validation findings are visible to reviewers and admins only.</p>
           </Card>
         )}
-
-        <Card className="p-6 space-y-2">
-          <h3 className="font-semibold text-sm">Submitted payload</h3>
-          <pre className="font-mono text-xs bg-muted rounded-md p-3 max-h-[500px] overflow-auto">
-            {JSON.stringify(sub.payload, null, 2)}
-          </pre>
-        </Card>
       </div>
     </Shell>
   );
@@ -212,14 +264,7 @@ function SubmissionDetail() {
 function Shell({ children }: { children: React.ReactNode }) {
   return (
     <div className="min-h-screen bg-background">
-      <header className="border-b border-border">
-        <div className="container mx-auto max-w-6xl flex items-center justify-between px-6 py-4">
-          <h1 className="text-lg font-semibold tracking-tight">Submission</h1>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/submissions"><ArrowLeft className="size-4" /> Back to queue</Link>
-          </Button>
-        </div>
-      </header>
+      <Header title="Submission" />
       <main className="container mx-auto max-w-6xl px-6 py-8">{children}</main>
     </div>
   );

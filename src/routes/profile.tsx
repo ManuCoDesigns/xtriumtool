@@ -1,12 +1,14 @@
 import { createFileRoute, Link, useNavigate } from "@tanstack/react-router";
 import { useEffect, useState } from "react";
 import { supabase } from "@/integrations/supabase/client";
+import { isMissingTableError } from "@/integrations/supabase/db-utils";
 import { Card } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Badge } from "@/components/ui/badge";
 import { ArrowLeft, Loader2, User, LogOut, AlertCircle } from "lucide-react";
+import Header from "@/components/header";
 
 
 export const Route = createFileRoute("/profile")({
@@ -62,13 +64,25 @@ function ProfilePage() {
     }
 
     const { data, error } = await supabase
-      .from("profiles")
+      .from("profiles" as any)
       .select("*")
       .eq("id", user.user.id)
       .single();
 
     if (error) {
-      setErr(error.message);
+      if (isMissingTableError(error)) {
+        setProfile({
+          id: user.user.id,
+          email: user.user.email || "",
+          full_name: null,
+          role: "submitter",
+          created_at: "",
+          updated_at: "",
+        });
+        setErr("Profile storage is unavailable; showing account information only.");
+      } else {
+        setErr(error.message);
+      }
     } else {
       setProfile(data as UserProfile);
       setFullName(data.full_name || "");
@@ -82,13 +96,16 @@ function ProfilePage() {
     setMsg(null);
 
     try {
-      const { error } = await supabase
-        .from("profiles")
+      if (!profile || !profile.created_at) {
+        throw new Error("Profile updates are unavailable until the database schema is available.");
+      }
+
+      const { error } = await (supabase.from("profiles" as any) as any)
         .update({
           full_name: fullName || null,
           updated_at: new Date().toISOString(),
         })
-        .eq("id", profile!.id);
+        .eq("id", profile.id);
 
       if (error) throw error;
       
@@ -124,24 +141,7 @@ function ProfilePage() {
 
   return (
     <div className="min-h-screen bg-gradient-to-br from-background via-background to-accent/5">
-      <header className="border-b border-border/60 backdrop-blur-sm bg-background/70 sticky top-0 z-50">
-        <div className="container mx-auto max-w-2xl flex items-center justify-between px-6 py-4">
-          <div className="flex items-center gap-3">
-            <div className="p-2 rounded-lg bg-primary/10 text-primary">
-              <User className="size-5" />
-            </div>
-            <div>
-              <h1 className="text-lg font-semibold tracking-tight">My Profile</h1>
-              <p className="text-xs text-muted-foreground">Manage your account settings</p>
-            </div>
-          </div>
-          <Button asChild variant="outline" size="sm">
-            <Link to="/">
-              <ArrowLeft className="size-4" /> Back
-            </Link>
-          </Button>
-        </div>
-      </header>
+      <Header title="My Profile" />
 
       <main className="container mx-auto max-w-2xl px-6 py-8">
         <Card className="p-6 space-y-6 shadow-lg border-border/40 animate-in fade-in slide-in-from-top-2 duration-500">
