@@ -1,0 +1,85 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "bgs_supplier_graph_v1",
+  "title": "BGS Directory of Mines and Quarries — Supplier Graph",
+  "type": "object",
+  "required": [
+    "company_name",
+    "canonical_name",
+    "supply_chain_tier",
+    "manufacturing_sites",
+    "products_offered",
+    "sources"
+  ],
+  "properties": {
+    "supplier_id": { "type": ["string", "null"] },
+    "duns_number": { "type": ["string", "null"] },
+    "company_name": { "type": "string", "minLength": 1 },
+    "canonical_name": { "type": "string", "minLength": 1, "pattern": "^[a-z0-9]+(?:-[a-z0-9]+)*$" },
+    "headquarters_location": { "type": ["string", "null"] },
+    "website": { "type": ["string", "null"], "format": "uri" },
+    "company_description": { "type": ["string", "null"] },
+    "industry_sector": { "type": ["string", "null"] },
+    "supply_chain_tier": { "type": "integer", "enum": [1, 2, 3] },
+    "typical_lead_time_days": { "type": ["integer", "null"], "minimum": 0 },
+    "manufacturing_sites": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/site" }
+    },
+    "certification_references": { "type": "array", "items": { "type": "string" } },
+    "certifications_raw": { "type": ["string", "null"] },
+    "regulation_references": { "type": "array", "items": { "type": "string" } },
+    "products_offered": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/product" }
+    },
+    "is_verified": { "type": "boolean" },
+    "data_completeness_flags": {
+      "type": ["object", "null"],
+      "additionalProperties": { "type": "string" }
+    },
+    "sources": {
+      "type": "array",
+      "minItems": 1,
+      "items": { "$ref": "#/$defs/source" }
+    }
+  },
+  "$defs": {
+    "site": {
+      "type": "object",
+      "required": ["location", "country", "raw"],
+      "properties": {
+        "location": { "type": "string", "minLength": 1 },
+        "country": {
+          "type": "string",
+          "enum": ["England", "Scotland", "Wales", "Northern Ireland", "Channel Islands", "Isle of Man"]
+        },
+        "site_type": { "type": ["string", "null"] },
+        "raw": { "type": "string", "minLength": 1 }
+      }
+    },
+    "product": {
+      "type": "object",
+      "required": ["product_name", "product_id", "category"],
+      "properties": {
+        "product_name": { "type": "string", "minLength": 1 },
+        "grade": { "type": ["string", "null"] },
+        "product_id": { "type": "string", "minLength": 1 },
+        "category": { "type": "string", "minLength": 1 },
+        "source_url": { "type": ["string", "null"], "format": "uri" },
+        "datasheet_url": { "type": ["string", "null"], "format": "uri" },
+        "cross_graph_material_id": { "type": ["string", "null"] }
+      }
+    },
+    "source": {
+      "type": "object",
+      "required": ["source_name", "source_url", "tier"],
+      "properties": {
+        "source_name": { "type": "string", "minLength": 1 },
+        "source_url": { "type": "string", "format": "uri" },
+        "doi": { "type": ["string", "null"] },
+        "tier": { "type": "string", "enum": ["tier1", "tier2", "tier3"] }
+      }
+    }
+  }
+}
