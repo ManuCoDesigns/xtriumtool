@@ -9,11 +9,18 @@
 // Additionally, you should also exclude this file from your linter and/or formatter to prevent it from being checked or modified.
 
 import { Route as rootRouteImport } from './routes/__root'
+import { Route as ProfileRouteImport } from './routes/profile'
 import { Route as AuthRouteImport } from './routes/auth'
 import { Route as IndexRouteImport } from './routes/index'
 import { Route as SubmissionsIndexRouteImport } from './routes/submissions.index'
 import { Route as SubmissionsIdRouteImport } from './routes/submissions.$id'
+import { Route as AdminUsersRouteImport } from './routes/admin/users'
 
+const ProfileRoute = ProfileRouteImport.update({
+  id: '/profile',
+  path: '/profile',
+  getParentRoute: () => rootRouteImport,
+} as any)
 const AuthRoute = AuthRouteImport.update({
   id: '/auth',
   path: '/auth',
@@ -34,16 +41,25 @@ const SubmissionsIdRoute = SubmissionsIdRouteImport.update({
   path: '/submissions/$id',
   getParentRoute: () => rootRouteImport,
 } as any)
+const AdminUsersRoute = AdminUsersRouteImport.update({
+  id: '/admin/users',
+  path: '/admin/users',
+  getParentRoute: () => rootRouteImport,
+} as any)
 
 export interface FileRoutesByFullPath {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/profile': typeof ProfileRoute
+  '/admin/users': typeof AdminUsersRoute
   '/submissions/$id': typeof SubmissionsIdRoute
   '/submissions/': typeof SubmissionsIndexRoute
 }
 export interface FileRoutesByTo {
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/profile': typeof ProfileRoute
+  '/admin/users': typeof AdminUsersRoute
   '/submissions/$id': typeof SubmissionsIdRoute
   '/submissions': typeof SubmissionsIndexRoute
 }
@@ -51,26 +67,56 @@ export interface FileRoutesById {
   __root__: typeof rootRouteImport
   '/': typeof IndexRoute
   '/auth': typeof AuthRoute
+  '/profile': typeof ProfileRoute
+  '/admin/users': typeof AdminUsersRoute
   '/submissions/$id': typeof SubmissionsIdRoute
   '/submissions/': typeof SubmissionsIndexRoute
 }
 export interface FileRouteTypes {
   fileRoutesByFullPath: FileRoutesByFullPath
-  fullPaths: '/' | '/auth' | '/submissions/$id' | '/submissions/'
+  fullPaths:
+    | '/'
+    | '/auth'
+    | '/profile'
+    | '/admin/users'
+    | '/submissions/$id'
+    | '/submissions/'
   fileRoutesByTo: FileRoutesByTo
-  to: '/' | '/auth' | '/submissions/$id' | '/submissions'
-  id: '__root__' | '/' | '/auth' | '/submissions/$id' | '/submissions/'
+  to:
+    | '/'
+    | '/auth'
+    | '/profile'
+    | '/admin/users'
+    | '/submissions/$id'
+    | '/submissions'
+  id:
+    | '__root__'
+    | '/'
+    | '/auth'
+    | '/profile'
+    | '/admin/users'
+    | '/submissions/$id'
+    | '/submissions/'
   fileRoutesById: FileRoutesById
 }
 export interface RootRouteChildren {
   IndexRoute: typeof IndexRoute
   AuthRoute: typeof AuthRoute
+  ProfileRoute: typeof ProfileRoute
+  AdminUsersRoute: typeof AdminUsersRoute
   SubmissionsIdRoute: typeof SubmissionsIdRoute
   SubmissionsIndexRoute: typeof SubmissionsIndexRoute
 }
 
 declare module '@tanstack/react-router' {
   interface FileRoutesByPath {
+    '/profile': {
+      id: '/profile'
+      path: '/profile'
+      fullPath: '/profile'
+      preLoaderRoute: typeof ProfileRouteImport
+      parentRoute: typeof rootRouteImport
+    }
     '/auth': {
       id: '/auth'
       path: '/auth'
@@ -99,12 +145,21 @@ declare module '@tanstack/react-router' {
       preLoaderRoute: typeof SubmissionsIdRouteImport
       parentRoute: typeof rootRouteImport
     }
+    '/admin/users': {
+      id: '/admin/users'
+      path: '/admin/users'
+      fullPath: '/admin/users'
+      preLoaderRoute: typeof AdminUsersRouteImport
+      parentRoute: typeof rootRouteImport
+    }
   }
 }
 
 const rootRouteChildren: RootRouteChildren = {
   IndexRoute: IndexRoute,
   AuthRoute: AuthRoute,
+  ProfileRoute: ProfileRoute,
+  AdminUsersRoute: AdminUsersRoute,
   SubmissionsIdRoute: SubmissionsIdRoute,
   SubmissionsIndexRoute: SubmissionsIndexRoute,
 }

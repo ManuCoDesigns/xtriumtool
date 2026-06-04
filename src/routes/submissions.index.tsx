@@ -4,7 +4,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { Card } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { ArrowLeft, FileJson, Loader2, AlertCircle, CheckCircle2, Clock, XCircle, AlertTriangle, Search } from \"lucide-react\";
+import { ArrowLeft, FileJson, Loader2, AlertCircle, CheckCircle2, Clock, XCircle, AlertTriangle, Search } from "lucide-react";
 import { Input } from "@/components/ui/input";
 
 export const Route = createFileRoute("/submissions/")({
